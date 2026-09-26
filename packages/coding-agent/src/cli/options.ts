@@ -2,19 +2,25 @@
  * Declarative table of built-in CLI options and commands.
  *
  * `parseArgs` resolves flags through this table and `printHelp` renders the Commands and
- * Options sections from it, so adding an option here is the only place its name, aliases,
- * value, and description are written down.
+ * Options sections from it, and `--completions` generates shell completion scripts from it,
+ * so adding an option here is the only place its name, aliases, value, and description are
+ * written down.
  */
 
 export const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const VALID_MODES = ["text", "json", "rpc"] as const;
 export const VALID_TUI_MODES = ["regular", "fullscreen"] as const;
+export const COMPLETION_SHELLS = ["bash", "zsh", "fish"] as const;
+
+export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
 
 export interface CliOptionValue {
 	/** Placeholder shown in help, including brackets, e.g. `<name>` or `[search]`. */
 	readonly placeholder: string;
 	/** Accepted values, when the option only takes a fixed set. */
 	readonly choices?: readonly string[];
+	/** Completes the value as a filesystem path. */
+	readonly path?: "file" | "directory";
 }
 
 export interface CliOption {
@@ -25,6 +31,8 @@ export interface CliOption {
 	/** Short aliases, e.g. `-p`. */
 	readonly aliases: readonly string[];
 	readonly value?: CliOptionValue;
+	/** Whether the option may be passed more than once. */
+	readonly repeatable?: boolean;
 	/** Help description. Each entry is rendered on its own line. */
 	readonly description: readonly string[];
 }
@@ -63,6 +71,7 @@ export const CLI_OPTIONS = [
 		flag: "--append-system-prompt",
 		aliases: [],
 		value: { placeholder: "<text>" },
+		repeatable: true,
 		description: ["Append text or file contents to the system prompt (can be used multiple times)"],
 	},
 	{
@@ -94,7 +103,7 @@ export const CLI_OPTIONS = [
 		id: "session",
 		flag: "--session",
 		aliases: [],
-		value: { placeholder: "<path|id>" },
+		value: { placeholder: "<path|id>", path: "file" },
 		description: ["Use specific session file or partial UUID"],
 	},
 	{
@@ -108,14 +117,14 @@ export const CLI_OPTIONS = [
 		id: "fork",
 		flag: "--fork",
 		aliases: [],
-		value: { placeholder: "<path|id>" },
+		value: { placeholder: "<path|id>", path: "file" },
 		description: ["Fork specific session file or partial UUID into a new session"],
 	},
 	{
 		id: "session-dir",
 		flag: "--session-dir",
 		aliases: [],
-		value: { placeholder: "<dir>" },
+		value: { placeholder: "<dir>", path: "directory" },
 		description: ["Directory for session storage and lookup"],
 	},
 	{
@@ -184,7 +193,8 @@ export const CLI_OPTIONS = [
 		id: "extension",
 		flag: "--extension",
 		aliases: ["-e"],
-		value: { placeholder: "<path>" },
+		value: { placeholder: "<path>", path: "file" },
+		repeatable: true,
 		description: ["Load an extension file (can be used multiple times)"],
 	},
 	{
@@ -197,7 +207,8 @@ export const CLI_OPTIONS = [
 		id: "skill",
 		flag: "--skill",
 		aliases: [],
-		value: { placeholder: "<path>" },
+		value: { placeholder: "<path>", path: "file" },
+		repeatable: true,
 		description: ["Load a skill file or directory (can be used multiple times)"],
 	},
 	{
@@ -210,7 +221,8 @@ export const CLI_OPTIONS = [
 		id: "prompt-template",
 		flag: "--prompt-template",
 		aliases: [],
-		value: { placeholder: "<path>" },
+		value: { placeholder: "<path>", path: "file" },
+		repeatable: true,
 		description: ["Load a prompt template file or directory (can be used multiple times)"],
 	},
 	{
@@ -223,7 +235,8 @@ export const CLI_OPTIONS = [
 		id: "theme",
 		flag: "--theme",
 		aliases: [],
-		value: { placeholder: "<path>" },
+		value: { placeholder: "<path>", path: "file" },
+		repeatable: true,
 		description: ["Load a theme file or directory (can be used multiple times)"],
 	},
 	{
@@ -249,7 +262,7 @@ export const CLI_OPTIONS = [
 		id: "export",
 		flag: "--export",
 		aliases: [],
-		value: { placeholder: "<file>" },
+		value: { placeholder: "<file>", path: "file" },
 		description: ["Export session file to HTML and exit"],
 	},
 	{
@@ -289,6 +302,13 @@ export const CLI_OPTIONS = [
 		flag: "--offline",
 		aliases: [],
 		description: ["Disable startup network operations (same as PI_OFFLINE=1)"],
+	},
+	{
+		id: "completions",
+		flag: "--completions",
+		aliases: [],
+		value: { placeholder: "<shell>", choices: COMPLETION_SHELLS },
+		description: [`Print a shell completion script: ${COMPLETION_SHELLS.join(", ")}`],
 	},
 	{
 		id: "end-of-options",

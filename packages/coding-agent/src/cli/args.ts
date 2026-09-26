@@ -11,6 +11,8 @@ import {
 	CLI_COMMANDS,
 	CLI_OPTIONS,
 	type CliOptionId,
+	COMPLETION_SHELLS,
+	type CompletionShell,
 	VALID_MODES,
 	VALID_THINKING_LEVELS,
 	VALID_TUI_MODES,
@@ -29,6 +31,7 @@ export interface Args {
 	resume?: boolean;
 	help?: boolean;
 	version?: boolean;
+	completions?: CompletionShell;
 	mode?: Mode;
 	name?: string;
 	noSession?: boolean;
@@ -121,6 +124,25 @@ const OPTION_HANDLERS: Record<CliOptionId, OptionHandler> = {
 	version: flagHandler((result) => {
 		result.version = true;
 	}),
+	completions: (args, i, result) => {
+		const shell = args[i + 1];
+		if (shell === undefined || shell.startsWith("-")) {
+			result.diagnostics.push({
+				type: "error",
+				message: `--completions requires ${COMPLETION_SHELLS.join(", ")}`,
+			});
+			return i;
+		}
+		if (!isOneOf(COMPLETION_SHELLS, shell)) {
+			result.diagnostics.push({
+				type: "error",
+				message: `Invalid shell "${shell}". Valid values: ${COMPLETION_SHELLS.join(", ")}`,
+			});
+			return i + 1;
+		}
+		result.completions = shell;
+		return i + 1;
+	},
 	mode: (args, i, result) => {
 		const mode = args[i + 1];
 		if (mode === undefined || mode.startsWith("-")) {

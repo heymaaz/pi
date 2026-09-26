@@ -198,8 +198,26 @@ See [Configuration](configuration.md) for saved configuration, [Security](securi
   Shows help, including flags registered by loaded extensions, then exits.
 - `-v`, `--version`<br>
   Shows the Pi version, then exits.
+- `--completions <shell>`<br>
+  Prints a completion script for `bash`, `zsh`, or `fish`, then exits. See [Shell completions](#shell-completions).
 
 Extensions may register additional long-form options. Unknown short options are rejected.
+
+## Shell completions
+
+`pi --completions <shell>` prints a completion script generated from the built-in options and commands, so it stays in sync with `pi --help`. It completes commands, options, option values such as `--thinking` levels, paths for path options, and `@file` arguments. Options registered by extensions are not completed.
+
+```sh
+# bash: add to ~/.bashrc
+eval "$(pi --completions bash)"
+
+# zsh: add to ~/.zshrc after compinit, or save it as _pi in a directory on $fpath
+eval "$(pi --completions zsh)"
+pi --completions zsh > ~/.zsh/completions/_pi
+
+# fish
+pi --completions fish > ~/.config/fish/completions/pi.fish
+```
 
 ## Package commands
 

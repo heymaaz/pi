@@ -34,6 +34,27 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--completions flag", () => {
+		test("parses a supported shell", () => {
+			const result = parseArgs(["--completions", "zsh"]);
+			expect(result.completions).toBe("zsh");
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("rejects an unsupported shell", () => {
+			const result = parseArgs(["--completions", "tcsh"]);
+			expect(result.completions).toBeUndefined();
+			expect(result.diagnostics).toEqual([
+				{ type: "error", message: 'Invalid shell "tcsh". Valid values: bash, zsh, fish' },
+			]);
+		});
+
+		test("requires a shell", () => {
+			const result = parseArgs(["--completions"]);
+			expect(result.diagnostics).toEqual([{ type: "error", message: "--completions requires bash, zsh, fish" }]);
+		});
+	});
+
 	describe("--print flag", () => {
 		test("parses --print flag", () => {
 			const result = parseArgs(["--print"]);
