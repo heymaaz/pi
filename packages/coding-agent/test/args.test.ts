@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
-import { normalizeSessionName, parseArgs } from "../src/cli/args.ts";
+import { describe, expect, test, vi } from "vitest";
+import { normalizeSessionName, parseArgs, printHelp } from "../src/cli/args.ts";
+import { CLI_COMMANDS, CLI_OPTIONS } from "../src/cli/options.ts";
 
 describe("parseArgs", () => {
 	describe("--version flag", () => {
@@ -528,5 +529,41 @@ describe("parseArgs", () => {
 			expect(result.fileArgs).toEqual(["prompt.md"]);
 			expect(result.messages).toEqual(["Do the task"]);
 		});
+	});
+});
+
+describe("CLI option table", () => {
+	test("flags and aliases are unique", () => {
+		const flags = CLI_OPTIONS.flatMap((option) => [option.flag, ...option.aliases]);
+		expect(new Set(flags).size).toBe(flags.length);
+	});
+
+	test("every flag and alias is recognized by parseArgs", () => {
+		for (const option of CLI_OPTIONS) {
+			for (const flag of [option.flag, ...option.aliases]) {
+				const result = parseArgs([flag, "value"]);
+				expect(result.unknownFlags.size, flag).toBe(0);
+				expect(
+					result.diagnostics.some((d) => d.message.startsWith("Unknown option")),
+					flag,
+				).toBe(false);
+			}
+		}
+	});
+
+	test("help lists every option and command", () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			printHelp();
+			const help = log.mock.calls.map((call) => String(call[0])).join("\n");
+			for (const option of CLI_OPTIONS) {
+				expect(help).toContain(`  ${[option.flag, ...option.aliases].join(", ")}`);
+			}
+			for (const command of CLI_COMMANDS) {
+				expect(help).toContain(` ${command.name}`);
+			}
+		} finally {
+			log.mockRestore();
+		}
 	});
 });

@@ -7,8 +7,16 @@ import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import type { TuiMode } from "../core/settings-manager.ts";
+import {
+	CLI_COMMANDS,
+	CLI_OPTIONS,
+	type CliOptionId,
+	VALID_MODES,
+	VALID_THINKING_LEVELS,
+	VALID_TUI_MODES,
+} from "./options.ts";
 
-export type Mode = "text" | "json" | "rpc";
+export type Mode = (typeof VALID_MODES)[number];
 
 export interface Args {
 	provider?: string;
@@ -57,16 +65,242 @@ export interface Args {
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
 
-const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+/** Returns the index of the last argument consumed, or undefined to fall back to generic handling. */
+type OptionHandler = (args: string[], i: number, result: Args) => number | undefined;
+
+function isOneOf<T extends string>(values: readonly T[], value: string): value is T {
+	return (values as readonly string[]).includes(value);
+}
 
 export function isValidThinkingLevel(level: string): level is ThinkingLevel {
-	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
+	return isOneOf(VALID_THINKING_LEVELS, level);
 }
 
 export function normalizeSessionName(value: string): string | undefined {
 	const name = value.trim();
 	return name.length > 0 ? name : undefined;
 }
+
+function flagHandler(apply: (result: Args) => void): OptionHandler {
+	return (_args, i, result) => {
+		apply(result);
+		return i;
+	};
+}
+
+/** Consumes the next argument unconditionally. Without one, the flag is handled as unknown. */
+function valueHandler(apply: (result: Args, value: string) => void): OptionHandler {
+	return (args, i, result) => {
+		if (i + 1 >= args.length) return undefined;
+		apply(result, args[i + 1]);
+		return i + 1;
+	};
+}
+
+function splitList(value: string): string[] {
+	return value
+		.split(",")
+		.map((s) => s.trim())
+		.filter((name) => name.length > 0);
+}
+
+const OPTION_HANDLERS: Record<CliOptionId, OptionHandler> = {
+	"end-of-options": (args, i, result) => {
+		for (const positionalArg of args.slice(i + 1)) {
+			if (positionalArg.startsWith("@")) {
+				result.fileArgs.push(positionalArg.slice(1));
+			} else {
+				result.messages.push(positionalArg);
+			}
+		}
+		return args.length;
+	},
+	help: flagHandler((result) => {
+		result.help = true;
+	}),
+	version: flagHandler((result) => {
+		result.version = true;
+	}),
+	mode: (args, i, result) => {
+		const mode = args[i + 1];
+		if (mode === undefined || mode.startsWith("-")) {
+			result.diagnostics.push({ type: "error", message: "--mode requires text, json, or rpc" });
+			return i;
+		}
+		if (!isOneOf(VALID_MODES, mode)) {
+			result.diagnostics.push({
+				type: "error",
+				message: `Invalid mode "${mode}". Valid values: ${VALID_MODES.join(", ")}`,
+			});
+			return i + 1;
+		}
+		result.mode = mode;
+		return i + 1;
+	},
+	continue: flagHandler((result) => {
+		result.continue = true;
+	}),
+	resume: flagHandler((result) => {
+		result.resume = true;
+	}),
+	provider: valueHandler((result, value) => {
+		result.provider = value;
+	}),
+	model: valueHandler((result, value) => {
+		result.model = value;
+	}),
+	"api-key": valueHandler((result, value) => {
+		result.apiKey = value;
+	}),
+	"system-prompt": valueHandler((result, value) => {
+		result.systemPrompt = value;
+	}),
+	"append-system-prompt": valueHandler((result, value) => {
+		result.appendSystemPrompt = result.appendSystemPrompt ?? [];
+		result.appendSystemPrompt.push(value);
+	}),
+	name: (args, i, result) => {
+		if (i + 1 < args.length) {
+			result.name = args[i + 1];
+			return i + 1;
+		}
+		result.diagnostics.push({ type: "error", message: "--name requires a value" });
+		return i;
+	},
+	"no-session": flagHandler((result) => {
+		result.noSession = true;
+	}),
+	session: valueHandler((result, value) => {
+		result.session = value;
+	}),
+	"session-id": valueHandler((result, value) => {
+		result.sessionId = value;
+	}),
+	fork: valueHandler((result, value) => {
+		result.fork = value;
+	}),
+	"session-dir": valueHandler((result, value) => {
+		result.sessionDir = value;
+	}),
+	models: valueHandler((result, value) => {
+		result.models = value.split(",").map((s) => s.trim());
+	}),
+	"no-tools": flagHandler((result) => {
+		result.noTools = true;
+	}),
+	"no-builtin-tools": flagHandler((result) => {
+		result.noBuiltinTools = true;
+	}),
+	tools: valueHandler((result, value) => {
+		result.tools = splitList(value);
+	}),
+	"exclude-tools": valueHandler((result, value) => {
+		result.excludeTools = splitList(value);
+	}),
+	thinking: valueHandler((result, level) => {
+		if (isValidThinkingLevel(level)) {
+			result.thinking = level;
+		} else {
+			result.diagnostics.push({
+				type: "warning",
+				message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+			});
+		}
+	}),
+	print: (args, i, result) => {
+		result.print = true;
+		const next = args[i + 1];
+		if (next !== undefined && !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))) {
+			result.messages.push(next);
+			return i + 1;
+		}
+		return i;
+	},
+	export: valueHandler((result, value) => {
+		result.export = value;
+	}),
+	extension: valueHandler((result, value) => {
+		result.extensions = result.extensions ?? [];
+		result.extensions.push(value);
+	}),
+	"no-extensions": flagHandler((result) => {
+		result.noExtensions = true;
+	}),
+	skill: valueHandler((result, value) => {
+		result.skills = result.skills ?? [];
+		result.skills.push(value);
+	}),
+	"prompt-template": valueHandler((result, value) => {
+		result.promptTemplates = result.promptTemplates ?? [];
+		result.promptTemplates.push(value);
+	}),
+	theme: valueHandler((result, value) => {
+		result.themes = result.themes ?? [];
+		result.themes.push(value);
+	}),
+	"use-theme": (args, i, result) => {
+		const themeName = args[i + 1];
+		if (themeName === undefined || themeName.startsWith("-")) {
+			result.diagnostics.push({ type: "error", message: "--use-theme requires a theme name" });
+			return i;
+		}
+		result.useTheme = themeName;
+		return i + 1;
+	},
+	"no-skills": flagHandler((result) => {
+		result.noSkills = true;
+	}),
+	"no-prompt-templates": flagHandler((result) => {
+		result.noPromptTemplates = true;
+	}),
+	"no-themes": flagHandler((result) => {
+		result.noThemes = true;
+	}),
+	"no-context-files": flagHandler((result) => {
+		result.noContextFiles = true;
+	}),
+	"list-models": (args, i, result) => {
+		// Check if next arg is a search pattern (not a flag or file arg)
+		if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
+			result.listModels = args[i + 1];
+			return i + 1;
+		}
+		result.listModels = true;
+		return i;
+	},
+	"tui-mode": (args, i, result) => {
+		const mode = args[i + 1];
+		if (mode !== undefined && isOneOf(VALID_TUI_MODES, mode)) {
+			result.tuiMode = mode;
+			return i + 1;
+		}
+		if (mode === undefined || mode.startsWith("-")) {
+			result.diagnostics.push({ type: "error", message: "--tui-mode requires regular or fullscreen" });
+			return i;
+		}
+		result.diagnostics.push({
+			type: "error",
+			message: `Invalid TUI mode "${mode}". Valid values: ${VALID_TUI_MODES.join(", ")}`,
+		});
+		return i + 1;
+	},
+	verbose: flagHandler((result) => {
+		result.verbose = true;
+	}),
+	approve: flagHandler((result) => {
+		result.projectTrustOverride = true;
+	}),
+	"no-approve": flagHandler((result) => {
+		result.projectTrustOverride = false;
+	}),
+	offline: flagHandler((result) => {
+		result.offline = true;
+	}),
+};
+
+const OPTIONS_BY_FLAG = new Map<string, CliOptionId>(
+	CLI_OPTIONS.flatMap((option) => [option.flag, ...option.aliases].map((flag) => [flag, option.id] as const)),
+);
 
 export function parseArgs(args: string[]): Args {
 	const result: Args = {
@@ -79,160 +313,16 @@ export function parseArgs(args: string[]): Args {
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 
-		if (arg === "--") {
-			for (const positionalArg of args.slice(i + 1)) {
-				if (positionalArg.startsWith("@")) {
-					result.fileArgs.push(positionalArg.slice(1));
-				} else {
-					result.messages.push(positionalArg);
-				}
-			}
-			break;
-		} else if (arg === "--help" || arg === "-h") {
-			result.help = true;
-		} else if (arg === "--version" || arg === "-v") {
-			result.version = true;
-		} else if (arg === "--mode") {
-			const mode = args[i + 1];
-			if (mode === undefined || mode.startsWith("-")) {
-				result.diagnostics.push({ type: "error", message: "--mode requires text, json, or rpc" });
+		const optionId = OPTIONS_BY_FLAG.get(arg);
+		if (optionId !== undefined) {
+			const lastConsumed = OPTION_HANDLERS[optionId](args, i, result);
+			if (lastConsumed !== undefined) {
+				i = lastConsumed;
 				continue;
 			}
-			i++;
-			if (mode !== "text" && mode !== "json" && mode !== "rpc") {
-				result.diagnostics.push({
-					type: "error",
-					message: `Invalid mode "${mode}". Valid values: text, json, rpc`,
-				});
-				continue;
-			}
-			result.mode = mode;
-		} else if (arg === "--continue" || arg === "-c") {
-			result.continue = true;
-		} else if (arg === "--resume" || arg === "-r") {
-			result.resume = true;
-		} else if (arg === "--provider" && i + 1 < args.length) {
-			result.provider = args[++i];
-		} else if (arg === "--model" && i + 1 < args.length) {
-			result.model = args[++i];
-		} else if (arg === "--api-key" && i + 1 < args.length) {
-			result.apiKey = args[++i];
-		} else if (arg === "--system-prompt" && i + 1 < args.length) {
-			result.systemPrompt = args[++i];
-		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
-			result.appendSystemPrompt = result.appendSystemPrompt ?? [];
-			result.appendSystemPrompt.push(args[++i]);
-		} else if (arg === "--name" || arg === "-n") {
-			if (i + 1 < args.length) {
-				result.name = args[++i];
-			} else {
-				result.diagnostics.push({ type: "error", message: "--name requires a value" });
-			}
-		} else if (arg === "--no-session") {
-			result.noSession = true;
-		} else if (arg === "--session" && i + 1 < args.length) {
-			result.session = args[++i];
-		} else if (arg === "--session-id" && i + 1 < args.length) {
-			result.sessionId = args[++i];
-		} else if (arg === "--fork" && i + 1 < args.length) {
-			result.fork = args[++i];
-		} else if (arg === "--session-dir" && i + 1 < args.length) {
-			result.sessionDir = args[++i];
-		} else if (arg === "--models" && i + 1 < args.length) {
-			result.models = args[++i].split(",").map((s) => s.trim());
-		} else if (arg === "--no-tools" || arg === "-nt") {
-			result.noTools = true;
-		} else if (arg === "--no-builtin-tools" || arg === "-nbt") {
-			result.noBuiltinTools = true;
-		} else if ((arg === "--tools" || arg === "-t") && i + 1 < args.length) {
-			result.tools = args[++i]
-				.split(",")
-				.map((s) => s.trim())
-				.filter((name) => name.length > 0);
-		} else if ((arg === "--exclude-tools" || arg === "-xt") && i + 1 < args.length) {
-			result.excludeTools = args[++i]
-				.split(",")
-				.map((s) => s.trim())
-				.filter((name) => name.length > 0);
-		} else if (arg === "--thinking" && i + 1 < args.length) {
-			const level = args[++i];
-			if (isValidThinkingLevel(level)) {
-				result.thinking = level;
-			} else {
-				result.diagnostics.push({
-					type: "warning",
-					message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
-				});
-			}
-		} else if (arg === "--print" || arg === "-p") {
-			result.print = true;
-			const next = args[i + 1];
-			if (next !== undefined && !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))) {
-				result.messages.push(next);
-				i++;
-			}
-		} else if (arg === "--export" && i + 1 < args.length) {
-			result.export = args[++i];
-		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
-			result.extensions = result.extensions ?? [];
-			result.extensions.push(args[++i]);
-		} else if (arg === "--no-extensions" || arg === "-ne") {
-			result.noExtensions = true;
-		} else if (arg === "--skill" && i + 1 < args.length) {
-			result.skills = result.skills ?? [];
-			result.skills.push(args[++i]);
-		} else if (arg === "--prompt-template" && i + 1 < args.length) {
-			result.promptTemplates = result.promptTemplates ?? [];
-			result.promptTemplates.push(args[++i]);
-		} else if (arg === "--theme" && i + 1 < args.length) {
-			result.themes = result.themes ?? [];
-			result.themes.push(args[++i]);
-		} else if (arg === "--use-theme") {
-			const themeName = args[i + 1];
-			if (themeName === undefined || themeName.startsWith("-")) {
-				result.diagnostics.push({ type: "error", message: "--use-theme requires a theme name" });
-			} else {
-				result.useTheme = themeName;
-				i++;
-			}
-		} else if (arg === "--no-skills" || arg === "-ns") {
-			result.noSkills = true;
-		} else if (arg === "--no-prompt-templates" || arg === "-np") {
-			result.noPromptTemplates = true;
-		} else if (arg === "--no-themes") {
-			result.noThemes = true;
-		} else if (arg === "--no-context-files" || arg === "-nc") {
-			result.noContextFiles = true;
-		} else if (arg === "--list-models") {
-			// Check if next arg is a search pattern (not a flag or file arg)
-			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
-				result.listModels = args[++i];
-			} else {
-				result.listModels = true;
-			}
-		} else if (arg === "--tui-mode") {
-			const mode = args[i + 1];
-			if (mode === "regular" || mode === "fullscreen") {
-				result.tuiMode = mode;
-				i++;
-			} else if (mode === undefined || mode.startsWith("-")) {
-				result.diagnostics.push({ type: "error", message: "--tui-mode requires regular or fullscreen" });
-			} else {
-				i++;
-				result.diagnostics.push({
-					type: "error",
-					message: `Invalid TUI mode "${mode}". Valid values: regular, fullscreen`,
-				});
-			}
-		} else if (arg === "--verbose") {
-			result.verbose = true;
-		} else if (arg === "--approve" || arg === "-a") {
-			result.projectTrustOverride = true;
-		} else if (arg === "--no-approve" || arg === "-na") {
-			result.projectTrustOverride = false;
-		} else if (arg === "--offline") {
-			result.offline = true;
-		} else if (arg.startsWith("@")) {
+		}
+
+		if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (arg.startsWith("--")) {
 			const eqIndex = arg.indexOf("=");
@@ -258,6 +348,33 @@ export function parseArgs(args: string[]): Args {
 	return result;
 }
 
+const HELP_OPTION_COLUMN = 33;
+const HELP_COMMAND_COLUMN = 29;
+
+function formatOptionsHelp(): string {
+	return CLI_OPTIONS.map((option) => {
+		const names = [option.flag, ...option.aliases].join(", ");
+		const value = "value" in option ? ` ${option.value.placeholder}` : "";
+		const [first, ...rest] = option.description;
+		const lines = [`  ${names}${value}`.padEnd(HELP_OPTION_COLUMN) + first];
+		for (const line of rest) {
+			lines.push(" ".repeat(HELP_OPTION_COLUMN) + line);
+		}
+		return lines.join("\n");
+	}).join("\n");
+}
+
+function formatCommandsHelp(): string {
+	const commandLine = (usage: string, description: string) =>
+		`  ${`${APP_NAME} ${usage}`.padEnd(HELP_COMMAND_COLUMN)}${description}`;
+	const lines = CLI_COMMANDS.map((command) =>
+		commandLine(command.usage ? `${command.name} ${command.usage}` : command.name, command.description),
+	);
+	const helpable = CLI_COMMANDS.map((command) => command.name).join("/");
+	lines.push(commandLine("<command> --help", `Show help for ${helpable}`));
+	return lines.join("\n");
+}
+
 export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
@@ -275,60 +392,10 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [--] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
-  ${APP_NAME} install <source> [-l]     Install extension source and add to settings
-  ${APP_NAME} remove <source> [-l]      Remove extension source from settings
-  ${APP_NAME} uninstall <source> [-l]   Alias for remove
-  ${APP_NAME} update [source|self|pi]   Update pi, extensions, or model catalogs
-  ${APP_NAME} list                      List installed extensions from settings
-  ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-  ${APP_NAME} auth <command>            Print credentials or check provider readiness
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth
+${formatCommandsHelp()}
 
 ${chalk.bold("Options:")}
-  --provider <name>              Provider name (default: google)
-  --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
-  --api-key <key>                API key (defaults to env vars)
-  --system-prompt <text>         System prompt (default: coding assistant prompt)
-  --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
-  --mode <mode>                  Output mode: text (default), json, or rpc
-  --print, -p                    Non-interactive mode: process prompt and exit
-  --continue, -c                 Continue previous session
-  --resume, -r                   Select a session to resume
-  --session <path|id>            Use specific session file or partial UUID
-  --session-id <id>              Use exact project session ID, creating it if missing
-  --fork <path|id>               Fork specific session file or partial UUID into a new session
-  --session-dir <dir>            Directory for session storage and lookup
-  --no-session                   Don't save session (ephemeral)
-  --name, -n <name>              Set session display name
-  --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
-                                 Supports globs (anthropic/*, *sonnet*) and fuzzy matching
-  --no-tools, -nt                Disable all tools by default (built-in and extension)
-  --no-builtin-tools, -nbt       Disable built-in tools by default but keep extension/custom tools enabled
-  --tools, -t <tools>            Comma-separated allowlist of tool names to enable
-                                 Applies to built-in, extension, and custom tools
-  --exclude-tools, -xt <tools>   Comma-separated denylist of tool names to disable
-                                 Applies to built-in, extension, and custom tools
-  --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
-  --extension, -e <path>         Load an extension file (can be used multiple times)
-  --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
-  --skill <path>                 Load a skill file or directory (can be used multiple times)
-  --no-skills, -ns               Disable skills discovery and loading
-  --prompt-template <path>       Load a prompt template file or directory (can be used multiple times)
-  --no-prompt-templates, -np     Disable prompt template discovery and loading
-  --theme <path>                 Load a theme file or directory (can be used multiple times)
-  --use-theme <name[/name]>      Set the initial interactive theme for this run
-  --no-themes                    Disable theme discovery and loading
-  --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
-  --export <file>                Export session file to HTML and exit
-  --list-models [search]         List available models (with optional fuzzy search)
-  --verbose                      Force verbose startup (overrides quietStartup setting)
-  --tui-mode <mode>              TUI mode: regular (default) or fullscreen
-  --approve, -a                  Trust project-local files for this run
-  --no-approve, -na              Ignore project-local files for this run
-  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
-  --                             End option parsing; treat remaining arguments as messages/files
-  --help, -h                     Show this help
-  --version, -v                  Show version number
+${formatOptionsHelp()}
 
 Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 
